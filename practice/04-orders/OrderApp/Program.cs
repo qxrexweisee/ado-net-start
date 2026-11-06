@@ -35,6 +35,8 @@ Console.WriteLine($"Остатки: {await StockAsync(dataSource)}");
 static async Task<string> CreateOrderAsync(NpgsqlDataSource dataSource, int customerId, List<OrderLine> lines)
 {
     await using var connection = await dataSource.OpenConnectionAsync();
+    await using var transaction = await connection.BeginTransactionAsync();
+
     try
     {
         decimal total = lines.Sum(l => l.Quantity * l.Price);
@@ -44,7 +46,7 @@ static async Task<string> CreateOrderAsync(NpgsqlDataSource dataSource, int cust
             INSERT INTO orders (customer_id, status, created_at, total)
             VALUES (@customer, 'new', CURRENT_DATE, @total)
             RETURNING id
-            """, connection);
+            """, connection, transaction);
         insertOrder.Parameters.AddWithValue("customer", customerId);
         insertOrder.Parameters.AddWithValue("total", total);
         int orderId = (int)(await insertOrder.ExecuteScalarAsync())!;
@@ -55,7 +57,7 @@ static async Task<string> CreateOrderAsync(NpgsqlDataSource dataSource, int cust
                 """
                 INSERT INTO order_items (order_id, product_id, quantity, price)
                 VALUES (@order, @product, @quantity, @price)
-                """, connection);
+                """, connection, transaction);
             insertItem.Parameters.AddWithValue("order", orderId);
             insertItem.Parameters.AddWithValue("product", line.ProductId);
             insertItem.Parameters.AddWithValue("quantity", line.Quantity);
@@ -63,16 +65,19 @@ static async Task<string> CreateOrderAsync(NpgsqlDataSource dataSource, int cust
             await insertItem.ExecuteNonQueryAsync();
 
             await using var takeStock = new NpgsqlCommand(
-                "UPDATE products SET stock = stock - @quantity WHERE id = @product", connection);
+    "UPDATE products SET stock = stock - @quantity WHERE id = @product",
+    connection, transaction);
             takeStock.Parameters.AddWithValue("quantity", line.Quantity);
             takeStock.Parameters.AddWithValue("product", line.ProductId);
             await takeStock.ExecuteNonQueryAsync();
         }
 
+                await transaction.CommitAsync();
         return $"оформлен, позиций {lines.Count}.";
     }
     catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.CheckViolation)
     {
+        await transaction.RollbackAsync();
         return "не оформлен, на складе не хватает товара.";
     }
 }
