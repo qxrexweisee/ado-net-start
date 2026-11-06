@@ -14,17 +14,33 @@ await using var dataSource = NpgsqlDataSource.Create(connectionString);
 await using var connection = await dataSource.OpenConnectionAsync();
 
 // 3. Команда: текст SQL-запроса, привязанный к соединению.
+
 await using var command = new NpgsqlCommand(
-    "SELECT id, status, total FROM orders ORDER BY id", connection);
+    """
+    SELECT o.id, c.full_name, o.total
+    FROM orders AS o
+    JOIN customers AS c ON o.customer_id = c.id
+    WHERE o.status = 'new'
+    ORDER BY o.id
+    """, connection);
+
 
 // 4. Читатель: получает ответ базы по одной строке.
 await using var reader = await command.ExecuteReaderAsync();
 
+
+int count = 0;
+
 while (await reader.ReadAsync())
 {
     int id = reader.GetInt32(0);
-    string status = reader.GetString(1);
+    string customerName = reader.GetString(1);
     decimal total = reader.GetDecimal(2);
 
-    Console.WriteLine($"Заказ {id}: {status}, {total} руб.");
+    Console.WriteLine($"Заказ {id}: {customerName}, {total} руб.");
+
+    count++;
 }
+
+Console.WriteLine($"Новых заказов: {count}");
+
